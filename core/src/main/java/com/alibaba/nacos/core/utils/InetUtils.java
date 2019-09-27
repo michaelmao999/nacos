@@ -65,6 +65,12 @@ public class InetUtils {
 
         String nacosIp = System.getProperty(NACOS_SERVER_IP);
         if (StringUtils.isBlank(nacosIp)) {
+            nacosIp = PropertyUtil.getProperty(NACOS_SERVER_IP);
+        }
+        if (StringUtils.isBlank(nacosIp)) {
+            nacosIp = PropertyUtil.getProperty(IP_ADDRESS);
+        }
+        if (StringUtils.isBlank(nacosIp)) {
             nacosIp = PropertyUtil.getProperty(IP_ADDRESS);
         }
 
