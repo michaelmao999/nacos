@@ -373,54 +373,67 @@ public class RaftCore {
                 if (local.leaderDueMs > 0) {
                     return;
                 }
-
-                // reset timeout
-                local.resetLeaderDue();
-                local.resetHeartbeatDue();
-
-                sendVote();
+                sendVote(local);
             } catch (Exception e) {
                 Loggers.RAFT.warn("[RAFT] error while master election {}", e);
             }
 
         }
 
-        public void sendVote() {
+        private void sendVote(RaftPeer local) {
 
-            RaftPeer local = peers.get(NetUtils.localServer());
-            Loggers.RAFT.info("leader timeout, start voting,leader: {}, term: {}",
+            long localTerm = local.term.get();
+            synchronized (local) {
+                if (local.term.get() > localTerm) {
+                    //do nothing;
+                    return;
+                }
+                // reset timeout
+                local.resetLeaderDue();
+                local.resetHeartbeatDue();
+                //RaftPeer local = peers.get(NetUtils.localServer());
+                Loggers.RAFT.info("leader timeout, start voting,leader: {}, term: {}",
                 JSON.toJSONString(getLeader()), local.term);
 
-            peers.reset();
+                peers.reset();
 
-            local.term.incrementAndGet();
-            local.voteFor = local.ip;
-            local.state = RaftPeer.State.CANDIDATE;
+                local.term.incrementAndGet();
+                local.voteFor = local.ip;
+                local.state = RaftPeer.State.CANDIDATE;
+            }
 
             Map<String, String> params = new HashMap<>(1);
             params.put("vote", JSON.toJSONString(local));
-            for (final String server : peers.allServersWithoutMySelf()) {
-                final String url = buildURL(server, API_VOTE);
-                try {
-                    HttpClient.asyncHttpPost(url, null, params, new AsyncCompletionHandler<Integer>() {
-                        @Override
-                        public Integer onCompleted(Response response) throws Exception {
-                            if (response.getStatusCode() != HttpURLConnection.HTTP_OK) {
-                                Loggers.RAFT.error("NACOS-RAFT vote failed: {}, url: {}", response.getResponseBody(), url);
-                                return 1;
+            Set<String> allServersWithoutSelf = peers.allServersWithoutMySelf();
+            //if there is only one server, then it will be leader.
+            if (allServersWithoutSelf.isEmpty()) {
+                local.state = RaftPeer.State.LEADER;
+                peers.decideLeader(local);
+                Loggers.RAFT.info("vote {} as leader, term: {}", local.ip, local.term);
+            } else {
+                for (final String server : peers.allServersWithoutMySelf()) {
+                    final String url = buildURL(server, API_VOTE);
+                    try {
+                        HttpClient.asyncHttpPost(url, null, params, new AsyncCompletionHandler<Integer>() {
+                            @Override
+                            public Integer onCompleted(Response response) throws Exception {
+                                if (response.getStatusCode() != HttpURLConnection.HTTP_OK) {
+                                    Loggers.RAFT.error("NACOS-RAFT vote failed: {}, url: {}", response.getResponseBody(), url);
+                                    return 1;
+                                }
+
+                                RaftPeer peer = JSON.parseObject(response.getResponseBody(), RaftPeer.class);
+
+                                Loggers.RAFT.info("received approve from peer: {}", JSON.toJSONString(peer));
+
+                                peers.decideLeader(peer);
+
+                                return 0;
                             }
-
-                            RaftPeer peer = JSON.parseObject(response.getResponseBody(), RaftPeer.class);
-
-                            Loggers.RAFT.info("received approve from peer: {}", JSON.toJSONString(peer));
-
-                            peers.decideLeader(peer);
-
-                            return 0;
-                        }
-                    });
-                } catch (Exception e) {
-                    Loggers.RAFT.warn("error while sending vote to server: {}", server);
+                        });
+                    } catch (Exception e) {
+                        Loggers.RAFT.warn("error while sending vote to server: {}", server);
+                    }
                 }
             }
         }
@@ -432,23 +445,25 @@ public class RaftCore {
         }
 
         RaftPeer local = peers.get(NetUtils.localServer());
-        if (remote.term.get() <= local.term.get()) {
-            String msg = "received illegitimate vote" +
-                ", voter-term:" + remote.term + ", votee-term:" + local.term;
+        //add a lock to prevent multiple voting.
+        synchronized (local) {
+            if (remote.term.get() <= local.term.get()) {
+                String msg = "received illegitimate vote" +
+                    ", voter-term:" + remote.term + ", votee-term:" + local.term;
 
-            Loggers.RAFT.info(msg);
-            if (StringUtils.isEmpty(local.voteFor)) {
-                local.voteFor = local.ip;
+                Loggers.RAFT.info(msg);
+                if (StringUtils.isEmpty(local.voteFor)) {
+                    local.voteFor = local.ip;
+                }
+                return local;
             }
 
-            return local;
+            local.resetLeaderDue();
+
+            local.state = RaftPeer.State.FOLLOWER;
+            local.voteFor = remote.ip;
+            local.term.set(remote.term.get());
         }
-
-        local.resetLeaderDue();
-
-        local.state = RaftPeer.State.FOLLOWER;
-        local.voteFor = remote.ip;
-        local.term.set(remote.term.get());
 
         Loggers.RAFT.info("vote {} as leader, term: {}", remote.ip, remote.term);
 
