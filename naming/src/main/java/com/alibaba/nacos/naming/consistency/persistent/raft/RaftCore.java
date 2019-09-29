@@ -449,7 +449,7 @@ public class RaftCore {
         synchronized (local) {
             if (remote.term.get() <= local.term.get()) {
                 String msg = "received illegitimate vote" +
-                    ", voter-term:" + remote.term + ", votee-term:" + local.term;
+                    ", remote voter-term:" + remote.term + ", local votee-term:" + local.term + " voteFor=" + local.voteFor;
 
                 Loggers.RAFT.info(msg);
                 if (StringUtils.isEmpty(local.voteFor)) {

@@ -165,7 +165,7 @@ public class RaftPeerSet implements ServerChangeListener, ApplicationContextAwar
             if (!Objects.equals(leader, peer)) {
                 leader = peer;
                 applicationContext.publishEvent(new LeaderElectFinishedEvent(this, leader));
-                Loggers.RAFT.info("{} has become the LEADER", leader.ip);
+                Loggers.RAFT.info("{} has become the LEADER, term : {}", leader.ip, leader.term.get());
             }
         }
 
