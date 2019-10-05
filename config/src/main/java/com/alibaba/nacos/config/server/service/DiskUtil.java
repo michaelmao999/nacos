@@ -118,7 +118,18 @@ public class DiskUtil {
             file = new File(file, tenant);
         }
         file = new File(file, group);
-        file = new File(file, dataId);
+        file = filterSpecialChar(file, dataId);
+        return file;
+    }
+
+    private static File filterSpecialChar(File file, String fileName) {
+        //dataId = com.demo.dubbo.springboot.nacos.api.DemoService:1.0.0::provider:dubbo-registry-nacos-provider-sample
+        String[] idArray = fileName.split(":");
+        for (String folder : idArray) {
+            if (folder != null && folder.trim().length() > 0) {
+                file = new File(file, folder.trim());
+            }
+        }
         return file;
     }
 
@@ -134,7 +145,8 @@ public class DiskUtil {
             file = new File(file, tenant);
         }
         file = new File(file, group);
-        file = new File(file, dataId);
+//        file = new File(file, dataId);
+        file = filterSpecialChar(file, dataId);
         return file;
     }
 
@@ -150,8 +162,10 @@ public class DiskUtil {
             file = new File(file, tenant);
         }
         file = new File(file, group);
-        file = new File(file, dataId);
-        file = new File(file, tag);
+//        file = new File(file, dataId);
+        file = filterSpecialChar(file, dataId);
+//        file = new File(file, tag);
+        file = filterSpecialChar(file, tag);
         return file;
     }
 
