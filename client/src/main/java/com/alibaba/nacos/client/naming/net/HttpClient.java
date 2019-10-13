@@ -68,8 +68,18 @@ public class HttpClient {
     public static HttpResult request(String url, List<String> headers, Map<String, String> paramValues, String encoding, String method) {
         HttpURLConnection conn = null;
         try {
-            String encodedContent = encodingParams(paramValues, encoding);
-            url += (StringUtils.isEmpty(encodedContent)) ? "" : ("?" + encodedContent);
+            String encodedContent;
+            if ((POST.equals(method) || PUT.equals(method))
+                && paramValues != null && paramValues.containsKey("isPostData")) {
+                String key= paramValues.remove("isPostData");
+                String value = paramValues.remove(key);
+                encodedContent = encodingParams(paramValues, encoding);
+                url += (StringUtils.isEmpty(encodedContent)) ? "" : ("?" + encodedContent);
+                encodedContent=key + "=" + URLEncoder.encode(value, encoding);
+            } else {
+                encodedContent = encodingParams(paramValues, encoding);
+                url += (StringUtils.isEmpty(encodedContent)) ? "" : ("?" + encodedContent);
+            }
 
             conn = (HttpURLConnection) new URL(url).openConnection();
 

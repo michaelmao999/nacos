@@ -321,6 +321,35 @@ public class NamingProxy {
         return 0L;
     }
 
+    public long sendBatchBeat(List<BeatInfo> beatInfos) {
+        if (beatInfos == null || beatInfos.isEmpty()) {
+            return 0;
+        }
+        String httpBody= JSON.toJSONString(beatInfos);
+        try {
+            if (NAMING_LOGGER.isDebugEnabled()) {
+                NAMING_LOGGER.debug("[BEAT] {} sending beat to server: {}", namespaceId, httpBody);
+            }
+            Map<String, String> params = new HashMap<String, String>(4);
+            params.put("batchbeat", httpBody);
+            params.put("isPostData", "batchbeat");
+            params.put(CommonParams.NAMESPACE_ID, namespaceId);
+            //Skip basic filter check
+            params.put(CommonParams.SERVICE_NAME, "1");
+
+            String result = reqAPI(UtilAndComs.NACOS_URL_BASE + "/instance/batchbeat", params, HttpMethod.POST);
+            JSONObject jsonObject = JSON.parseObject(result);
+
+            if (jsonObject != null) {
+                return jsonObject.getLong("clientBeatInterval");
+            }
+        } catch (Exception e) {
+            NAMING_LOGGER.error("[CLIENT-BEAT] failed to send batch beat: " + httpBody, e);
+        }
+        return 0L;
+    }
+
+
     public boolean serverHealthy() {
 
         try {
@@ -562,6 +591,6 @@ public class NamingProxy {
             this.serverPort = Integer.parseInt(sp);
         }
     }
-    
+
 }
 

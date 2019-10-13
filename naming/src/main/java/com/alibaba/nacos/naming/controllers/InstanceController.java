@@ -260,6 +260,80 @@ public class InstanceController {
         return result;
     }
 
+    @CanDistro
+    @RequestMapping(value = "/batchbeat", method = RequestMethod.POST)
+    public JSONObject batchBeat(HttpServletRequest request) throws Exception {
+
+        JSONObject result = new JSONObject();
+        result.put("clientBeatInterval", switchDomain.getClientBeatInterval());
+
+        String namespaceId = WebUtils.optional(request, CommonParams.NAMESPACE_ID,
+            Constants.DEFAULT_NAMESPACE_ID);
+
+        String batchbeat = WebUtils.required(request, "batchbeat");
+        List<RsInfo> clientBeatList = JSON.parseArray(batchbeat, RsInfo.class);
+        if (clientBeatList == null || clientBeatList.isEmpty()) {
+            throw new NacosException(NacosException.SERVER_ERROR, "service not found on batchbeat: " + namespaceId);
+        }
+        return processBeat(namespaceId, clientBeatList, result);
+    }
+
+    private JSONObject processBeat(String namespaceId, List<RsInfo> clientBeatList, JSONObject result) throws Exception {
+        int len = clientBeatList.size();
+        long heartBeatInerval = Long.MAX_VALUE;
+
+        for (int index = 0; index < len; index++) {
+            RsInfo clientBeat = clientBeatList.get(index);
+            if (!switchDomain.isDefaultInstanceEphemeral() && !clientBeat.isEphemeral()) {
+                continue;
+            }
+
+            if (StringUtils.isBlank(clientBeat.getCluster())) {
+                clientBeat.setCluster(UtilsAndCommons.DEFAULT_CLUSTER_NAME);
+            }
+            String serviceName = clientBeat.getServiceName();
+            if (serviceName == null || serviceName.length() == 0) {
+                throw new NacosException(NacosException.SERVER_ERROR, "serviceName cannot be empty:" + namespaceId);
+            }
+            String clusterName = clientBeat.getCluster();
+
+            if (Loggers.SRV_LOG.isDebugEnabled()) {
+                Loggers.SRV_LOG.debug("[CLIENT-BEAT] full arguments: batchbeat: {}, serviceName: {}", clientBeat, serviceName);
+            }
+
+            Instance instance = serviceManager.getInstance(namespaceId, serviceName, clientBeat.getCluster(), clientBeat.getIp(),
+                clientBeat.getPort());
+
+            if (instance == null) {
+                instance = new Instance();
+                instance.setPort(clientBeat.getPort());
+                instance.setIp(clientBeat.getIp());
+                instance.setWeight(clientBeat.getWeight());
+                instance.setMetadata(clientBeat.getMetadata());
+                instance.setClusterName(clusterName);
+                instance.setServiceName(serviceName);
+                instance.setInstanceId(instance.generateInstanceId());
+                instance.setEphemeral(clientBeat.isEphemeral());
+
+                serviceManager.registerInstance(namespaceId, serviceName, instance);
+            }
+
+            Service service = serviceManager.getService(namespaceId, serviceName);
+
+            if (service == null) {
+                throw new NacosException(NacosException.SERVER_ERROR, "[batchbeat] service not found: " + serviceName + "@" + namespaceId);
+            }
+            service.processClientBeat(clientBeat);
+            if (instance.getInstanceHeartBeatInterval() < heartBeatInerval) {
+                heartBeatInerval = instance.getInstanceHeartBeatInterval();
+            }
+
+        }
+        if (heartBeatInerval < Long.MAX_VALUE) {
+            result.put("clientBeatInterval", heartBeatInerval);
+        }
+        return result;
+    }
 
     @RequestMapping("/statuses")
     public JSONObject listWithHealthStatus(HttpServletRequest request) throws NacosException {
