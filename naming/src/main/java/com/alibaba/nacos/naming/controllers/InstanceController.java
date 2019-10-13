@@ -162,6 +162,51 @@ public class InstanceController {
         return doSrvIPXT(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck, app, tenant, healthyOnly);
     }
 
+    @RequestMapping(value = "/multilist", method = RequestMethod.POST)
+    public JSONArray multiList(HttpServletRequest request) throws Exception {
+
+        String namespaceId = WebUtils.optional(request, CommonParams.NAMESPACE_ID,
+            Constants.DEFAULT_NAMESPACE_ID);
+        String serviceList = WebUtils.required(request, "multilist");
+        JSONArray list = JSON.parseArray(serviceList);
+        String agent = WebUtils.getUserAgent(request);
+        JSONArray result = new JSONArray();
+        int len = list.size();
+        for (int index = 0; index < len; index++) {
+            JSONObject serviceInfo = list.getJSONObject(index);
+            JSONObject serviceDetail = getServiceInfo(namespaceId, agent, serviceInfo);
+            result.add(serviceDetail);
+        }
+        return result;
+    }
+
+    private static String getOptional(JSONObject json, String key, String defaultValue) {
+        String value = json.getString(key);
+        if (value == null || value.length() == 0) {
+            return defaultValue;
+        }
+        return value;
+    }
+
+    private JSONObject getServiceInfo(String namespaceId, String agent, JSONObject serviceModel) throws Exception {
+        String serviceName = serviceModel.getString(CommonParams.SERVICE_NAME);
+
+        String clusters = getOptional(serviceModel, "clusters", StringUtils.EMPTY);
+        String clientIP = getOptional(serviceModel, "clientIP", StringUtils.EMPTY);
+        Integer udpPort = Integer.parseInt(getOptional(serviceModel, "udpPort", "0"));
+        String env = getOptional(serviceModel, "env", StringUtils.EMPTY);
+        boolean isCheck = Boolean.parseBoolean(getOptional(serviceModel, "isCheck", "false"));
+
+        String app = getOptional(serviceModel, "app", StringUtils.EMPTY);
+
+        String tenant = getOptional(serviceModel, "tid", StringUtils.EMPTY);
+
+        boolean healthyOnly = Boolean.parseBoolean(getOptional(serviceModel, "healthyOnly", "false"));
+
+        return doSrvIPXT(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck, app, tenant, healthyOnly);
+    }
+
+
     @RequestMapping(value = "", method = RequestMethod.GET)
     public JSONObject detail(HttpServletRequest request) throws Exception {
 

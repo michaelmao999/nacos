@@ -300,6 +300,40 @@ public class NamingProxy {
         return reqAPI(UtilAndComs.NACOS_URL_BASE + "/instance/list", params, HttpMethod.GET);
     }
 
+    /**
+     *  Batch get service information by service name list.
+     *
+     * @param serviceList    Map<String, String> contains
+     *                      CommonParams.SERVICE_NAME (serviceName), clusters, udpPort, healthyOnly.
+     * @return
+     * @throws NacosException
+     */
+    public String queryMultilist(List<Map<String, String>>  serviceList)  throws NacosException {
+
+        final Map<String, String> params = new HashMap<String, String>(4);
+        String clientIP = NetUtils.localIP();
+        int len = serviceList.size();
+        for (int index = 0; index < len; index++) {
+            Map<String, String> serviceMap = serviceList.get(index);
+            serviceMap.put("clientIP", clientIP);
+        }
+        String httpBody= JSON.toJSONString(serviceList);
+
+        params.put("multilist", httpBody);
+        params.put("isPostData", "multilist");
+        params.put(CommonParams.NAMESPACE_ID, namespaceId);
+        //Skip basic filter check
+        params.put(CommonParams.SERVICE_NAME, "1");
+
+//        params.put(CommonParams.SERVICE_NAME, serviceName);
+//        params.put("clusters", clusters);
+//        params.put("udpPort", String.valueOf(udpPort));
+//        params.put("healthyOnly", String.valueOf(healthyOnly));
+
+        return reqAPI(UtilAndComs.NACOS_URL_BASE + "/instance/multilist", params, HttpMethod.POST);
+    }
+
+
     public long sendBeat(BeatInfo beatInfo) {
         try {
             if (NAMING_LOGGER.isDebugEnabled()) {

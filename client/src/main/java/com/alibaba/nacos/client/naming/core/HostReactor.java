@@ -16,7 +16,10 @@
 package com.alibaba.nacos.client.naming.core;
 
 import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
 import com.alibaba.nacos.api.exception.NacosException;
+import com.alibaba.nacos.api.naming.CommonParams;
 import com.alibaba.nacos.api.naming.pojo.Instance;
 import com.alibaba.nacos.api.naming.pojo.ServiceInfo;
 import com.alibaba.nacos.client.monitor.MetricsMonitor;
@@ -28,6 +31,8 @@ import com.alibaba.nacos.client.utils.StringUtils;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static com.alibaba.nacos.client.utils.LogUtils.NAMING_LOGGER;
 
@@ -39,8 +44,6 @@ public class HostReactor {
     private static final long DEFAULT_DELAY = 1000L;
 
     private static final long UPDATE_HOLD_INTERVAL = 5000L;
-
-    private final Map<String, ScheduledFuture<?>> futureMap = new HashMap<String, ScheduledFuture<?>>();
 
     private Map<String, ServiceInfo> serviceInfoMap;
 
@@ -58,6 +61,8 @@ public class HostReactor {
 
     private ScheduledExecutorService executor;
 
+    private BatchUpdateTask batchUpdateTask;
+
     public HostReactor(EventDispatcher eventDispatcher, NamingProxy serverProxy, String cacheDir) {
         this(eventDispatcher, serverProxy, cacheDir, false, UtilAndComs.DEFAULT_POLLING_THREAD_COUNT);
     }
@@ -65,7 +70,7 @@ public class HostReactor {
     public HostReactor(EventDispatcher eventDispatcher, NamingProxy serverProxy, String cacheDir,
                        boolean loadCacheAtStart, int pollingThreadCount) {
 
-        executor = new ScheduledThreadPoolExecutor(pollingThreadCount, new ThreadFactory() {
+        executor = new ScheduledThreadPoolExecutor(1, new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
                 Thread thread = new Thread(r);
@@ -87,14 +92,12 @@ public class HostReactor {
         this.updatingMap = new ConcurrentHashMap<String, Object>();
         this.failoverReactor = new FailoverReactor(this, cacheDir);
         this.pushReceiver = new PushReceiver(this);
+        batchUpdateTask = new BatchUpdateTask();
+        executor.schedule(batchUpdateTask, DEFAULT_DELAY, TimeUnit.MILLISECONDS);
     }
 
     public Map<String, ServiceInfo> getServiceInfoMap() {
         return serviceInfoMap;
-    }
-
-    public synchronized ScheduledFuture<?> addTask(UpdateTask task) {
-        return executor.schedule(task, DEFAULT_DELAY, TimeUnit.MILLISECONDS);
     }
 
     public ServiceInfo processServiceJSON(String json) {
@@ -257,22 +260,11 @@ public class HostReactor {
         return serviceInfoMap.get(serviceObj.getKey());
     }
 
-    public void scheduleUpdateIfAbsent(String serviceName, String clusters) {
-        if (futureMap.get(ServiceInfo.getKey(serviceName, clusters)) != null) {
-            return;
-        }
-
-        synchronized (futureMap) {
-            if (futureMap.get(ServiceInfo.getKey(serviceName, clusters)) != null) {
-                return;
-            }
-
-            ScheduledFuture<?> future = addTask(new UpdateTask(serviceName, clusters));
-            futureMap.put(ServiceInfo.getKey(serviceName, clusters), future);
-        }
+    private void scheduleUpdateIfAbsent(String serviceName, String clusters) {
+        batchUpdateTask.addService(serviceName, clusters);
     }
 
-    public void updateServiceNow(String serviceName, String clusters) {
+    private void updateServiceNow(String serviceName, String clusters) {
         ServiceInfo oldService = getServiceInfo0(serviceName, clusters);
         try {
 
@@ -292,51 +284,129 @@ public class HostReactor {
         }
     }
 
-    public void refreshOnly(String serviceName, String clusters) {
+    private List<ServiceInfo> updateServiceNow(List<ServiceRefreshTimeModel> serviceRefList) {
+        List<ServiceInfo> oldServiceList = new ArrayList<ServiceInfo>();
+        List<Map<String, String>> serviceList = new ArrayList<Map<String, String>>();
+        List<ServiceInfo> newServiceList = new ArrayList<ServiceInfo>();
+        int len = serviceRefList.size();
+
         try {
-            serverProxy.queryList(serviceName, clusters, pushReceiver.getUDPPort(), false);
+            for (int index = 0; index < len; index++) {
+                ServiceRefreshTimeModel model = serviceRefList.get(index);
+                ServiceInfo oldService = getServiceInfo0(model.getServiceName(), model.getClusters());
+                if (oldService != null) {
+                    oldServiceList.add(oldService);
+                }
+                Map<String, String> serviceModel = new HashMap<String, String>();
+                serviceModel.put(CommonParams.SERVICE_NAME, model.getServiceName());
+                serviceModel.put("clusters", model.getClusters());
+                serviceModel.put("udpPort", String.valueOf(pushReceiver.getUDPPort()));
+                serviceModel.put("healthyOnly", Boolean.FALSE.toString());
+                serviceList.add(serviceModel);
+            }
+            String result = serverProxy.queryMultilist(serviceList);
+
+            if (StringUtils.isNotEmpty(result)) {
+                JSONArray resultList = JSON.parseArray(result);
+                len = resultList.size();
+                for (int index = 0; index < len; index++) {
+                    JSONObject objResult = resultList.getJSONObject(index);
+                    ServiceInfo newServiceInfo = processServiceJSON(objResult.toJSONString());
+                    newServiceList.add(newServiceInfo);
+                }
+            }
         } catch (Exception e) {
-            NAMING_LOGGER.error("[NA] failed to update serviceName: " + serviceName, e);
+            NAMING_LOGGER.error("[NA] failed to batch update serviceName: " + serviceRefList.get(0).getServiceName(), e);
+        } finally {
+            if (!oldServiceList.isEmpty()) {
+                len = oldServiceList.size();
+                for (int index = 0; index < len; index++) {
+                    ServiceInfo oldService = oldServiceList.get(index);
+                    synchronized (oldService) {
+                        oldService.notifyAll();
+                    }
+                }
+            }
         }
+        return newServiceList;
     }
 
-    public class UpdateTask implements Runnable {
-        long lastRefTime = Long.MAX_VALUE;
-        private String clusters;
-        private String serviceName;
+    public class BatchUpdateTask implements Runnable {
+        private List<ServiceRefreshTimeModel> serviceList = new ArrayList<ServiceRefreshTimeModel>();
+        private Map<String, ServiceRefreshTimeModel> serviceNameMap = new HashMap<String, ServiceRefreshTimeModel>();
+        private Lock lock = new ReentrantLock();
 
-        public UpdateTask(String serviceName, String clusters) {
-            this.serviceName = serviceName;
-            this.clusters = clusters;
+        public BatchUpdateTask() {
+        }
+
+        public boolean addService(String serviceName, String clusters) {
+            String key = ServiceInfo.getKey(serviceName, clusters);
+            if (serviceNameMap.containsKey(key)) {
+                return true;
+            }
+            lock.lock();
+            try {
+                if (serviceNameMap.containsKey(key)) {
+                    return true;
+                }
+                ServiceRefreshTimeModel serviceModel = new ServiceRefreshTimeModel(serviceName, clusters);
+                serviceList.add(serviceModel);
+                serviceNameMap.put(key, serviceModel);
+            } finally {
+                lock.unlock();
+            }
+            return true;
+        }
+
+        private void updateRefreshTime(List<ServiceInfo> newServiceList) {
+            int len = newServiceList.size();
+            for (int index = 0; index < len; index++) {
+                ServiceInfo serviceInfo = newServiceList.get(index);
+                String key = ServiceInfo.getKey(serviceInfo.getName() , serviceInfo.getClusters());
+                ServiceRefreshTimeModel refreshTimeModel = serviceNameMap.get(key);
+                if (serviceInfo.getLastRefTime() != 0) {
+                    refreshTimeModel.setLastRefTime(serviceInfo.getLastRefTime());
+                }
+            }
         }
 
         @Override
         public void run() {
+            int len = serviceList.size();
             try {
-                ServiceInfo serviceObj = serviceInfoMap.get(ServiceInfo.getKey(serviceName, clusters));
 
-                if (serviceObj == null) {
-                    updateServiceNow(serviceName, clusters);
+                List<ServiceRefreshTimeModel> serviceRefList = new ArrayList<ServiceRefreshTimeModel>();
+
+                for (int index = 0; index < len; index++) {
+                    ServiceRefreshTimeModel freshModel = serviceList.get(index);
+                    String key = ServiceInfo.getKey(freshModel.getServiceName(), freshModel.getClusters());
+                    ServiceInfo serviceObj = serviceInfoMap.get(key);
+                    if (serviceObj == null || serviceObj.getLastRefTime() <= freshModel.getLastRefTime()) {
+                        serviceRefList.add(freshModel);
+                    }
+                }
+                if (serviceRefList.isEmpty()) {
                     executor.schedule(this, DEFAULT_DELAY, TimeUnit.MILLISECONDS);
-                    return;
-                }
-
-                if (serviceObj.getLastRefTime() <= lastRefTime) {
-                    updateServiceNow(serviceName, clusters);
-                    serviceObj = serviceInfoMap.get(ServiceInfo.getKey(serviceName, clusters));
                 } else {
-                    // if serviceName already updated by push, we should not override it
-                    // since the push data may be different from pull through force push
-                    refreshOnly(serviceName, clusters);
+                    List<ServiceInfo> newServiceList = updateServiceNow(serviceRefList);
+                    if (newServiceList.isEmpty()) {
+                        executor.schedule(this, DEFAULT_DELAY, TimeUnit.MILLISECONDS);
+                    } else {
+                        long timeout = newServiceList.get(0).getCacheMillis();
+                        if (timeout == 1000) {
+                            timeout = DEFAULT_DELAY;
+                        }
+                        executor.schedule(this, timeout, TimeUnit.MILLISECONDS);
+                        updateRefreshTime(newServiceList);
+                    }
                 }
-
-                executor.schedule(this, serviceObj.getCacheMillis(), TimeUnit.MILLISECONDS);
-
-                lastRefTime = serviceObj.getLastRefTime();
             } catch (Throwable e) {
-                NAMING_LOGGER.warn("[NA] failed to update serviceName: " + serviceName, e);
+                NAMING_LOGGER.warn("[NA] failed to batch update serviceName ", e);
+                executor.schedule(this, DEFAULT_DELAY, TimeUnit.MILLISECONDS);
             }
 
         }
     }
+
+
 }
