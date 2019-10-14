@@ -15,15 +15,13 @@
  */
 package com.alibaba.nacos.client.naming.beat;
 
-import com.alibaba.nacos.api.common.Constants;
-import com.alibaba.nacos.client.monitor.MetricsMonitor;
-import com.alibaba.nacos.client.naming.net.NamingProxy;
-import com.alibaba.nacos.client.naming.utils.UtilAndComs;
 
-import java.util.Map;
+import com.alibaba.nacos.client.naming.net.NamingProxy;
+
 import java.util.concurrent.*;
 
 import static com.alibaba.nacos.client.utils.LogUtils.NAMING_LOGGER;
+import static com.alibaba.nacos.api.common.Constants.DEFAULT_HEART_BEAT_INTERVAL;
 
 /**
  * @author harold
@@ -32,18 +30,10 @@ public class BeatReactor {
 
     private ScheduledExecutorService executorService;
 
-    private NamingProxy serverProxy;
-
-    public final Map<String, BeatInfo> dom2Beat = new ConcurrentHashMap<String, BeatInfo>();
+    private BeatBatchTask batchTask;
 
     public BeatReactor(NamingProxy serverProxy) {
-        this(serverProxy, UtilAndComs.DEFAULT_CLIENT_BEAT_THREAD_COUNT);
-    }
-
-    public BeatReactor(NamingProxy serverProxy, int threadCount) {
-        this.serverProxy = serverProxy;
-
-        executorService = new ScheduledThreadPoolExecutor(threadCount, new ThreadFactory() {
+        executorService = new ScheduledThreadPoolExecutor(1, new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
                 Thread thread = new Thread(r);
@@ -52,52 +42,18 @@ public class BeatReactor {
                 return thread;
             }
         });
+        batchTask = new BeatBatchTask(executorService, serverProxy);
+        executorService.schedule(batchTask, DEFAULT_HEART_BEAT_INTERVAL, TimeUnit.MILLISECONDS);
     }
 
     public void addBeatInfo(String serviceName, BeatInfo beatInfo) {
         NAMING_LOGGER.info("[BEAT] adding beat: {} to beat map.", beatInfo);
-        String key = buildKey(serviceName, beatInfo.getIp(), beatInfo.getPort());
-        BeatInfo existBeat = null;
-        //fix #1733
-        if ((existBeat = dom2Beat.remove(key)) != null) {
-            existBeat.setStopped(true);
-        }
-        dom2Beat.put(key, beatInfo);
-        executorService.schedule(new BeatTask(beatInfo), beatInfo.getPeriod(), TimeUnit.MILLISECONDS);
-        MetricsMonitor.getDom2BeatSizeMonitor().set(dom2Beat.size());
+        batchTask.addBeatInfo(serviceName, beatInfo);
     }
 
     public void removeBeatInfo(String serviceName, String ip, int port) {
         NAMING_LOGGER.info("[BEAT] removing beat: {}:{}:{} from beat map.", serviceName, ip, port);
-        BeatInfo beatInfo = dom2Beat.remove(buildKey(serviceName, ip, port));
-        if (beatInfo == null) {
-            return;
-        }
-        beatInfo.setStopped(true);
-        MetricsMonitor.getDom2BeatSizeMonitor().set(dom2Beat.size());
+        batchTask.removeBeatInfo(serviceName, ip, port);
     }
 
-    private String buildKey(String serviceName, String ip, int port) {
-        return serviceName + Constants.NAMING_INSTANCE_ID_SPLITTER
-            + ip + Constants.NAMING_INSTANCE_ID_SPLITTER + port;
-    }
-
-    class BeatTask implements Runnable {
-
-        BeatInfo beatInfo;
-
-        public BeatTask(BeatInfo beatInfo) {
-            this.beatInfo = beatInfo;
-        }
-
-        @Override
-        public void run() {
-            if (beatInfo.isStopped()) {
-                return;
-            }
-            long result = serverProxy.sendBeat(beatInfo);
-            long nextTime = result > 0 ? result : beatInfo.getPeriod();
-            executorService.schedule(new BeatTask(beatInfo), nextTime, TimeUnit.MILLISECONDS);
-        }
-    }
 }

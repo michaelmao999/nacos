@@ -20,6 +20,7 @@ package com.alibaba.nacos.client.naming.core;
  */
 public class ServiceRefreshTimeModel {
     private long lastRefTime = Long.MAX_VALUE;
+    private Boolean isfirst = Boolean.TRUE;
     private String clusters;
     private String serviceName;
 
@@ -34,6 +35,14 @@ public class ServiceRefreshTimeModel {
 
     public void setLastRefTime(long lastRefTime) {
         this.lastRefTime = lastRefTime;
+    }
+
+    public Boolean getIsfirst() {
+        return isfirst;
+    }
+
+    public void setIsfirst(Boolean isfirst) {
+        this.isfirst = isfirst;
     }
 
     public String getClusters() {

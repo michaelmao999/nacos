@@ -34,6 +34,7 @@ import com.alibaba.nacos.naming.misc.UtilsAndCommons;
 import com.alibaba.nacos.naming.push.ClientInfo;
 import com.alibaba.nacos.naming.push.DataSource;
 import com.alibaba.nacos.naming.push.PushService;
+import com.alibaba.nacos.naming.selector.NoneSelector;
 import com.alibaba.nacos.naming.web.CanDistro;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.BooleanUtils;
@@ -175,7 +176,9 @@ public class InstanceController {
         for (int index = 0; index < len; index++) {
             JSONObject serviceInfo = list.getJSONObject(index);
             JSONObject serviceDetail = getServiceInfo(namespaceId, agent, serviceInfo);
-            result.add(serviceDetail);
+            if (serviceDetail != null) {
+                result.add(serviceDetail);
+            }
         }
         return result;
     }
@@ -202,8 +205,10 @@ public class InstanceController {
         String tenant = getOptional(serviceModel, "tid", StringUtils.EMPTY);
 
         boolean healthyOnly = Boolean.parseBoolean(getOptional(serviceModel, "healthyOnly", "false"));
-
-        return doSrvIPXT(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck, app, tenant, healthyOnly);
+        String checksum = getOptional(serviceModel, "checksum", StringUtils.EMPTY);
+        boolean isFirst = Boolean.parseBoolean(getOptional(serviceModel, "isfirst", "true"));
+        return doSrvIPXT(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck,
+            app, tenant, healthyOnly, checksum, isFirst);
     }
 
 
@@ -474,10 +479,13 @@ public class InstanceController {
             throw new Exception("service is disabled now.");
         }
     }
-
     public JSONObject doSrvIPXT(String namespaceId, String serviceName, String agent, String clusters, String clientIP, int udpPort,
                                 String env, boolean isCheck, String app, String tid, boolean healthyOnly) throws Exception {
-
+        return doSrvIPXT(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck, app, tid, healthyOnly,
+            null, true);
+    }
+    private JSONObject doSrvIPXT(String namespaceId, String serviceName, String agent, String clusters, String clientIP, int udpPort,
+                                String env, boolean isCheck, String app, String tid, boolean healthyOnly, String checksum, boolean isFirst) throws Exception {
         ClientInfo clientInfo = new ClientInfo(agent);
         JSONObject result = new JSONObject();
         Service service = serviceManager.getService(namespaceId, serviceName);
@@ -488,6 +496,7 @@ public class InstanceController {
             }
             result.put("name", serviceName);
             result.put("clusters", clusters);
+
             result.put("hosts", new JSONArray());
             return result;
         }
@@ -498,7 +507,7 @@ public class InstanceController {
 
         // now try to enable the push
         try {
-            if (udpPort > 0 && pushService.canEnablePush(agent)) {
+            if (isFirst && udpPort > 0 && pushService.canEnablePush(agent)) {
                 pushService.addClient(namespaceId, serviceName,
                     clusters,
                     agent,
@@ -511,6 +520,12 @@ public class InstanceController {
         } catch (Exception e) {
             Loggers.SRV_LOG.error("[NACOS-API] failed to added push client", e);
             cacheMillis = switchDomain.getDefaultCacheMillis();
+        }
+
+        if (!isFirst && checksum != null && checksum.equals(service.getChecksum())
+            && (service.getSelector() == null || service.getSelector() instanceof NoneSelector)) {
+            //no change
+            return null;
         }
 
         List<Instance> srvedIPs;

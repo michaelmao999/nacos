@@ -94,27 +94,8 @@ public class NacosNamingService implements NamingService {
         eventDispatcher = new EventDispatcher();
         serverProxy = new NamingProxy(namespace, endpoint, serverList);
         serverProxy.setProperties(properties);
-        beatReactor = new BeatReactor(serverProxy, initClientBeatThreadCount(properties));
-        hostReactor = new HostReactor(eventDispatcher, serverProxy, cacheDir, isLoadCacheAtStart(properties), initPollingThreadCount(properties));
-    }
-
-    private int initClientBeatThreadCount(Properties properties) {
-        if (properties == null) {
-            return UtilAndComs.DEFAULT_CLIENT_BEAT_THREAD_COUNT;
-        }
-
-        return NumberUtils.toInt(properties.getProperty(PropertyKeyConst.NAMING_CLIENT_BEAT_THREAD_COUNT),
-            UtilAndComs.DEFAULT_CLIENT_BEAT_THREAD_COUNT);
-    }
-
-    private int initPollingThreadCount(Properties properties) {
-        if (properties == null) {
-
-            return UtilAndComs.DEFAULT_POLLING_THREAD_COUNT;
-        }
-
-        return NumberUtils.toInt(properties.getProperty(PropertyKeyConst.NAMING_POLLING_THREAD_COUNT),
-            UtilAndComs.DEFAULT_POLLING_THREAD_COUNT);
+        beatReactor = new BeatReactor(serverProxy);
+        hostReactor = new HostReactor(eventDispatcher, serverProxy, cacheDir, isLoadCacheAtStart(properties));
     }
 
     private boolean isLoadCacheAtStart(Properties properties) {
