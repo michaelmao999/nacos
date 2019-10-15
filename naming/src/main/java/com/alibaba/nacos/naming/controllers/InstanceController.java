@@ -27,6 +27,8 @@ import com.alibaba.nacos.naming.core.Instance;
 import com.alibaba.nacos.naming.core.Service;
 import com.alibaba.nacos.naming.core.ServiceManager;
 import com.alibaba.nacos.api.exception.NacosException;
+import com.alibaba.nacos.naming.healthcheck.BatchHeartbeatProcessor;
+import com.alibaba.nacos.naming.healthcheck.HealthCheckReactor;
 import com.alibaba.nacos.naming.healthcheck.RsInfo;
 import com.alibaba.nacos.naming.misc.Loggers;
 import com.alibaba.nacos.naming.misc.SwitchDomain;
@@ -331,6 +333,7 @@ public class InstanceController {
     private JSONObject processBeat(String namespaceId, List<RsInfo> clientBeatList, JSONObject result) throws Exception {
         int len = clientBeatList.size();
         long heartBeatInerval = Long.MAX_VALUE;
+        BatchHeartbeatProcessor batchProcessor = new BatchHeartbeatProcessor();
 
         for (int index = 0; index < len; index++) {
             RsInfo clientBeat = clientBeatList.get(index);
@@ -373,12 +376,13 @@ public class InstanceController {
             if (service == null) {
                 throw new NacosException(NacosException.SERVER_ERROR, "[batchbeat] service not found: " + serviceName + "@" + namespaceId);
             }
-            service.processClientBeat(clientBeat);
+            batchProcessor.addHeartbeatProcessor(service, clientBeat);
             if (instance.getInstanceHeartBeatInterval() < heartBeatInerval) {
                 heartBeatInerval = instance.getInstanceHeartBeatInterval();
             }
 
         }
+        HealthCheckReactor.scheduleNow(batchProcessor);
         if (heartBeatInerval < Long.MAX_VALUE) {
             result.put("clientBeatInterval", heartBeatInerval);
         }
