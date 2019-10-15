@@ -312,12 +312,27 @@ public class ClientWorker {
         return (null == group) ? Constants.DEFAULT_GROUP : group.trim();
     }
 
-    public void checkConfigInfo() {
+    private void checkConfigInfo() {
         // 分任务
         int listenerSize = cacheMap.get().size();
         // 向上取整为批数
         int longingTaskCount = (int) Math.ceil(listenerSize / ParamUtil.getPerTaskConfigSize());
         if (longingTaskCount > currentLongingTaskCount) {
+            if (executorService == null) {
+                int processors = Runtime.getRuntime().availableProcessors();
+                if (longingTaskCount < processors) {
+                    processors = longingTaskCount;
+                }
+                executorService = Executors.newScheduledThreadPool(processors, new ThreadFactory() {
+                    @Override
+                    public Thread newThread(Runnable r) {
+                        Thread t = new Thread(r);
+                        t.setName("com.alibaba.nacos.client.Worker.longPolling." + agent.getName());
+                        t.setDaemon(true);
+                        return t;
+                    }
+                });
+            }
             for (int i = (int) currentLongingTaskCount; i < longingTaskCount; i++) {
                 // 要判断任务是否在执行 这块需要好好想想。 任务列表现在是无序的。变化过程可能有问题
                 executorService.execute(new LongPollingRunnable(i));
@@ -448,15 +463,15 @@ public class ClientWorker {
             }
         });
 
-        executorService = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r);
-                t.setName("com.alibaba.nacos.client.Worker.longPolling." + agent.getName());
-                t.setDaemon(true);
-                return t;
-            }
-        });
+//        executorService = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
+//            @Override
+//            public Thread newThread(Runnable r) {
+//                Thread t = new Thread(r);
+//                t.setName("com.alibaba.nacos.client.Worker.longPolling." + agent.getName());
+//                t.setDaemon(true);
+//                return t;
+//            }
+//        });
 
         executor.scheduleWithFixedDelay(new Runnable() {
             @Override
@@ -541,7 +556,7 @@ public class ClientWorker {
                     }
                 }
                 inInitializingCacheList.clear();
-
+                Thread.sleep(500);
                 executorService.execute(this);
 
             } catch (Throwable e) {
@@ -562,7 +577,7 @@ public class ClientWorker {
     }
 
     final ScheduledExecutorService executor;
-    final ScheduledExecutorService executorService;
+    ScheduledExecutorService executorService;
 
     /**
      * groupKey -> cacheData
