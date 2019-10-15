@@ -379,7 +379,6 @@ public class HostReactor {
         public void run() {
             int len = serviceList.size();
             try {
-
                 List<ServiceRefreshTimeModel> serviceRefList = new ArrayList<ServiceRefreshTimeModel>();
 
                 for (int index = 0; index < len; index++) {
@@ -389,16 +388,17 @@ public class HostReactor {
                     if (serviceObj == null || serviceObj.getLastRefTime() <= freshModel.getLastRefTime()) {
                         serviceRefList.add(freshModel);
                     }
+                    if (serviceObj != null && serviceObj.getCacheMillis() > 0) {
+                        lastInterval = serviceObj.getCacheMillis();
+                    }
                 }
+
                 if (serviceRefList.isEmpty()) {
                     executor.schedule(this, lastInterval, TimeUnit.MILLISECONDS);
                 } else {
                     List<ServiceInfo> newServiceList = updateServiceNow(serviceRefList);
-                    if (newServiceList.isEmpty()) {
-                        executor.schedule(this, lastInterval, TimeUnit.MILLISECONDS);
-                    } else {
-                        lastInterval = newServiceList.get(0).getCacheMillis();
-                        executor.schedule(this, lastInterval, TimeUnit.MILLISECONDS);
+                    executor.schedule(this, lastInterval, TimeUnit.MILLISECONDS);
+                    if (!newServiceList.isEmpty()) {
                         updateRefreshTime(newServiceList);
                     }
                 }
