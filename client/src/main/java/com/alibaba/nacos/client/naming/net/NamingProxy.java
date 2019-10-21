@@ -55,6 +55,8 @@ public class NamingProxy {
 
     private static final int DEFAULT_SERVER_PORT = 8848;
 
+    private static final long DEFALUT_STICKY_TIMEOUT = 30000;
+
     private int serverPort = DEFAULT_SERVER_PORT;
 
     private String namespaceId;
@@ -72,6 +74,10 @@ public class NamingProxy {
     private long vipSrvRefInterMillis = TimeUnit.SECONDS.toMillis(30);
 
     private Properties properties;
+
+    private int lastIndex = -1;
+
+    private long lastAvailableTime;
 
     public NamingProxy(String namespaceId, String endpoint, String serverList) {
 
@@ -507,22 +513,35 @@ public class NamingProxy {
         Exception exception = new Exception();
 
         if (servers != null && !servers.isEmpty()) {
-
-            Random random = new Random(System.currentTimeMillis());
-            int index = random.nextInt(servers.size());
-
+            int index = 0;
+            long current = System.currentTimeMillis();
+            if (lastIndex == -1 || current > lastAvailableTime + DEFALUT_STICKY_TIMEOUT) {
+                Random random = new Random(current);
+                index = random.nextInt(servers.size());
+            } else {
+                index = lastIndex;
+            }
+            boolean isSuccess = true;
             for (int i = 0; i < servers.size(); i++) {
                 String server = servers.get(index);
                 try {
+                    isSuccess = true;
                     return callServer(api, params, server, method);
                 } catch (NacosException e) {
+                    isSuccess = false;
+                    lastAvailableTime = System.currentTimeMillis();
                     exception = e;
                     NAMING_LOGGER.error("request {} failed.", server, e);
                 } catch (Exception e) {
+                    isSuccess = false;
+                    lastAvailableTime = System.currentTimeMillis();
                     exception = e;
                     NAMING_LOGGER.error("request {} failed.", server, e);
+                } finally {
+                    if (isSuccess) {
+                        lastIndex = index;
+                    }
                 }
-
                 index = (index + 1) % servers.size();
             }
 
